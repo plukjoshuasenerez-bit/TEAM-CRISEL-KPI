@@ -996,6 +996,39 @@ function syncNow(){
   showToast('⏳ Syncing to Sheet...');
   Promise.resolve(pushConfig()).then(()=>cloudLoad(true)).then(()=>showToast('✓ Agents and settings synced to Sheet')).catch(()=>showToast('⚠ Sync failed — check the Web App URL / access.'));
 }
+/* ===== Config storage na gumagana kahit lumang Apps Script =====
+   Sine-save ang activities/logo/settings bilang special rows sa "Records" tab
+   (agent = __CONFIG__), gamit lang ang 'add' at 'delete' na meron na sa lumang script. */
+const CFG_AGENT='__CONFIG__',CFG_CHUNK=40000;
+let _backendHasConfig=false,_cfgRowIds=[];
+function isCfgRow(r){return String(r.agent)===CFG_AGENT||String(r.id).indexOf('__CFG__')===0}
+function readConfigChunks(rows){
+  let groups={};_cfgRowIds=[];
+  rows.forEach(r=>{
+    if(!isCfgRow(r))return;
+    _cfgRowIds.push(String(r.id));
+    try{let c=JSON.parse(r.notes);(groups[c.v]=groups[c.v]||{n:c.n,parts:{}}).parts[c.i]=c.d}catch(e){}
+  });
+  let vers=Object.keys(groups).map(Number).sort((a,b)=>b-a);
+  for(let v of vers){
+    let g=groups[v],ok=true,str='';
+    for(let i=0;i<g.n;i++){if(g.parts[i]==null){ok=false;break}str+=g.parts[i]}
+    if(ok)return str;
+  }
+  return null;
+}
+async function saveConfigAsRows(cfgStr){
+  try{
+    let v=Date.now(),n=Math.ceil(cfgStr.length/CFG_CHUNK)||1,rows=[];
+    for(let i=0;i<n;i++)rows.push({id:'__CFG__'+v+'_'+i,date:'',agent:CFG_AGENT,status:'',activity:'config',count:0,points:0,notes:JSON.stringify({v:v,i:i,n:n,d:cfgStr.slice(i*CFG_CHUNK,(i+1)*CFG_CHUNK)})});
+    let out=await cloudPost({action:'add',records:rows});
+    if(!out||!out.ok)return false;
+    // burahin ang lumang config rows (pagkatapos ma-save ang bago)
+    let old=_cfgRowIds.slice();_cfgRowIds=rows.map(r=>r.id);
+    for(let id of old){try{await cloudPost({action:'delete',id:id})}catch(e){}}
+    return true;
+  }catch(e){return false}
+}
 // Pinagsasama ang sunod-sunod na changes sa isang save para hindi mag-overlap
 let _cfgTimer=null,_cfgWaiters=[],_cfgBusy=false;
 function pushConfig(){
@@ -1007,8 +1040,12 @@ async function flushConfig(){
   let waiters=_cfgWaiters;_cfgWaiters=[];_cfgBusy=true;let ok=false;
   try{
     let cfgSettings={...settings};delete cfgSettings.sheetsApiUrl;
-    let out=await cloudPost({action:'saveConfig',config:JSON.stringify({activities:activities,agents:agentList,settings:cfgSettings,recruiter:recruiterMap,agentStatus:agentStatusMap,agentTarget:agentTargetMap})});
-    ok=!!(out&&out.ok);
+    let cfgStr=JSON.stringify({activities:activities,agents:agentList,settings:cfgSettings,recruiter:recruiterMap,agentStatus:agentStatusMap,agentTarget:agentTargetMap});
+    if(_backendHasConfig){
+      let out=await cloudPost({action:'saveConfig',config:cfgStr});
+      ok=!!(out&&out.ok);
+    }
+    if(!ok)ok=await saveConfigAsRows(cfgStr);
   }catch(e){}
   _cfgBusy=false;
   if(!ok)showToast('⚠ Hindi na-sync sa Sheet — check ang Web App URL.');
@@ -1023,12 +1060,15 @@ async function cloudLoad(quiet,silent){
     let res=await fetch(u+(u.indexOf('?')>-1?'&':'?')+'t='+Date.now(),{cache:'no-store'});
     let data=await res.json();
     if(data.ok){
-      records=(data.records||[]).map(r=>({...r,date:normDate(r.date),count:Number(r.count||0),points:Number(r.points||0)})).filter(r=>r.id&&r.id!=='id'&&r.agent&&r.agent!=='agent');
+      let all=(data.records||[]).filter(r=>r.id&&r.id!=='id'&&r.agent&&r.agent!=='agent');
+      _backendHasConfig=('config' in data);
+      let chunkCfg=readConfigChunks(all);
+      records=all.filter(r=>!isCfgRow(r)).map(r=>({...r,date:normDate(r.date),count:Number(r.count||0),points:Number(r.points||0)}));
       write(KEYS.records,records);
       let isAgent=document.body.classList.contains('agent-mode');
-      if(!('config' in data)){
-        if(!isAgent)showToast('⚠ Lumang Apps Script ang naka-deploy — i-redeploy as New Version (Settings → Copy Apps Script)');
-      }else if(!data.config&&!isAgent&&!configPending()){
+      // Gamitin ang Config tab kung meron; kung wala (lumang Apps Script), kunin sa naka-save na config rows
+      if(!data.config&&chunkCfg)data.config=chunkCfg;
+      if(!data.config&&!isAgent&&!configPending()){
         // Walang laman ang Config sa Sheet: i-upload ang activities/logo/settings ng device na ito
         pushConfig().then(ok=>{if(ok)showToast('✓ Na-upload ang activities at logo sa Sheet')});
       }
