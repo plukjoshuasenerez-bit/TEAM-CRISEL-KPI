@@ -522,13 +522,14 @@ const TEAM_AGENTS=[
    If blank, only local storage is used (per-device).
    Ito ang Web App URL ng Google Sheet ni TEAM JT.
    ============================================================ */
-const SHEETS_API_URL="";
+const SHEETS_API_URL="https://script.google.com/macros/s/AKfycbwyzRqqUEsAhG864KI1wpYTjVR5I2fWbgcH2qo2-hz9soVaWHMmvQ_ophd3D7gk0IR_/exec";
 
 function getApiUrl(){
-  // Priority: 1) URL param na "api" (galing sa shared link), 2) Settings ng dashboard, 3) hardcoded sa taas
+  // Priority: 1) URL param na "api", 2) hardcoded na TEAM URL sa taas, 3) Settings ng device
   try{let p=new URLSearchParams(location.search).get('api');if(p&&p.indexOf('https://')===0)return p}catch(e){}
+  if(SHEETS_API_URL.indexOf('https://')===0)return SHEETS_API_URL;
   if(settings&&settings.sheetsApiUrl&&settings.sheetsApiUrl.indexOf('https://')===0)return settings.sheetsApiUrl;
-  return SHEETS_API_URL;
+  return '';
 }
 function cloudEnabled(){return getApiUrl().indexOf('https://')===0}
 
@@ -1024,6 +1025,13 @@ async function cloudLoad(quiet,silent){
     if(data.ok){
       records=(data.records||[]).map(r=>({...r,date:normDate(r.date),count:Number(r.count||0),points:Number(r.points||0)})).filter(r=>r.id&&r.id!=='id'&&r.agent&&r.agent!=='agent');
       write(KEYS.records,records);
+      let isAgent=document.body.classList.contains('agent-mode');
+      if(!('config' in data)){
+        if(!isAgent)showToast('⚠ Lumang Apps Script ang naka-deploy — i-redeploy as New Version (Settings → Copy Apps Script)');
+      }else if(!data.config&&!isAgent&&!configPending()){
+        // Walang laman ang Config sa Sheet: i-upload ang activities/logo/settings ng device na ito
+        pushConfig().then(ok=>{if(ok)showToast('✓ Na-upload ang activities at logo sa Sheet')});
+      }
       if(!configPending()){
         if(Array.isArray(data.agents)&&data.agents.length){agentList=data.agents;write(KEYS.agents,agentList)}
         applyCloudConfig(data.config);
