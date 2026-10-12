@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TEAM JT KPI Monitoring v1.5</title>
+<title>TEAM JT KPI Monitoring v1.6</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -704,13 +704,18 @@ records=records.filter(r=>r.id!==id);write(KEYS.records,records);renderAll()}
 function clearRecords(){
 if(cloudEnabled())return alert('Naka-Google Sheets mode ka. Para i-clear lahat, buksan ang Google Sheet at doon i-delete ang mga rows (huwag idelete ang header row).');
 if(confirm('Clear all standalone KPI records?')){records=[];write(KEYS.records,records);renderAll()}}
-function addActivity(){let name=activityName.value.trim(),points=Number(activityPoints.value);if(!name||points<0)return alert('Enter activity name and points.');if(activities.some(a=>norm(a.name)===norm(name)))return alert('Activity already exists.');activities.push({name,points});write(KEYS.activities,activities);pushConfig();activityName.value='';activityPoints.value='';renderAll()}
+function addActivity(){let name=activityName.value.trim(),points=Number(activityPoints.value);if(!name||points<0)return alert('Enter activity name and points.');if(activities.some(a=>norm(a.name)===norm(name)))return alert('Activity already exists.');activities.push({name,points});syncActivities();activityName.value='';activityPoints.value='';renderAll()}
+function syncActivities(){
+  write(KEYS.activities,activities);
+  if(cloudEnabled()){pushConfig().then(function(ok){if(ok)showToast('✓ Activities synced sa Agent Form');});}
+  else showToast('✓ Activities saved');
+}
 function renderActivities(){activityRows.innerHTML=activities.map((a,i)=>`<tr ondragover="event.preventDefault()" ondrop="actDrop(event,${i})"><td class="drag-h" draggable="true" ondragstart="actDrag(event,${i})">⠿</td><td><input value="${esc(a.name)}" onchange="editActivity(${i},'name',this.value)"></td><td><input type="number" min="0" value="${a.points}" onchange="editActivity(${i},'points',this.value)"></td><td><button class="danger" onclick="removeActivity(${i})">Delete</button></td></tr>`).join('')}
 let _actDrag=null;
 function actDrag(e,i){_actDrag=i;e.dataTransfer.effectAllowed='move';}
-function actDrop(e,i){e.preventDefault();if(_actDrag===null||_actDrag===i)return;const m=activities.splice(_actDrag,1)[0];activities.splice(i,0,m);_actDrag=null;write(KEYS.activities,activities);pushConfig();renderAll();}
-function editActivity(i,k,v){activities[i][k]=k==='points'?Number(v):v.trim();write(KEYS.activities,activities);pushConfig();renderSelectors()}
-function removeActivity(i){if(confirm('Delete this activity? Existing records will stay unchanged.')){activities.splice(i,1);write(KEYS.activities,activities);pushConfig();renderAll()}}
+function actDrop(e,i){e.preventDefault();if(_actDrag===null||_actDrag===i)return;const m=activities.splice(_actDrag,1)[0];activities.splice(i,0,m);_actDrag=null;syncActivities();renderAll();}
+function editActivity(i,k,v){activities[i][k]=k==='points'?Number(v):v.trim();syncActivities();renderSelectors()}
+function removeActivity(i){if(confirm('Delete this activity? Existing records will stay unchanged.')){activities.splice(i,1);syncActivities();renderAll()}}
 function renderReports(){
   let s=dashStart.value,e=dashEnd.value,rows=filterRows(s,e,'');
   let groups={};teamAgents(rows).forEach(a=>groups[a]=[]);rows.forEach(r=>(groups[r.agent]??=[]).push(r));let nDays=rangeDays(s,e,rows);
@@ -755,6 +760,7 @@ function applyBranding(){
   appSubtitle.textContent=(settings.kpiName||'KPI')+' standalone monitoring application';
   document.title=settings.kpiName||'KPI Monitoring';
   brandLogo.src=settings.logoData||DEFAULT_LOGO;brandLogo.style.display='block';
+  try{portalLogo.src=settings.logoData||DEFAULT_LOGO;portalLogo.style.display='block';portalTitle.textContent=settings.kpiName||'TEAM JT';}catch(e){}
 }
 function previewBranding(){
   document.documentElement.style.setProperty('--navy',primaryColor.value);
@@ -766,8 +772,23 @@ function previewLogo(ev){
   const file=ev.target.files&&ev.target.files[0];
   if(!file)return;
   const reader=new FileReader();
-  reader.onload=()=>{settings.logoData=reader.result;brandLogo.src=reader.result;brandLogo.style.display='block'};
+  reader.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      // Liitan ang logo (max 256px) para mabilis mag-sync sa Google Sheet at sa Agent Form
+      const max=256,sc=Math.min(1,max/Math.max(img.width,img.height));
+      const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*sc));c.height=Math.max(1,Math.round(img.height*sc));
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      settings.logoData=c.toDataURL('image/png');
+      write(KEYS.settings,settings);applyBranding();
+      if(cloudEnabled()){showToast('⏳ Sina-sync ang logo...');pushConfig().then(ok=>{if(ok)showToast('✓ Logo synced sa Agent Form')});}
+      else showToast('✓ Logo saved');
+    };
+    img.onerror=()=>alert('Hindi mabasa ang image. Subukan ang PNG o JPG.');
+    img.src=reader.result;
+  };
   reader.readAsDataURL(file);
+  ev.target.value='';
 }
 function saveSettings(){
   settings={...settings,baseTarget:Number(baseTarget.value||150),kpiName:kpiName.value.trim()||'TEAM JT KPI',kpiSubtitle:kpiSubtitle.value.trim()||'KPI MONITORING SYSTEM',primaryColor:primaryColor.value,secondaryColor:secondaryColor.value,accentColor:accentColor.value,actionColor:actionColor.value,challengeStart:challengeStart.value||'',challengeEnd:challengeEnd.value||'',sheetsApiUrl:sheetsApiUrl.value.trim()};
@@ -803,12 +824,17 @@ function renderAgentForm(){
   // Default date = today
   if(!afDate.value)afDate.value=new Date().toISOString().slice(0,10);
   // Activity list from dashboard activities
+  let sig=JSON.stringify(activities);
+  if(afActList._sig!==sig){
+  let typed={};afActList.querySelectorAll('input[data-act]').forEach(el=>{if(el.value)typed[el.dataset.act]=el.value});
+  afActList._sig=sig;
   afActList.innerHTML=activities.map((a,i)=>`
     <div class="act-row">
       <div><span class="act-name">${esc(a.name)}</span><span class="act-pts">${a.points} pt${a.points==1?'':'s'} each</span></div>
-      <input type="number" min="0" placeholder="0" id="afCount_${i}" oninput="updateFormTotals()">
+      <input type="number" min="0" placeholder="0" id="afCount_${i}" data-act="${esc(a.name)}" value="${esc(typed[a.name]||'')}" oninput="updateFormTotals()">
       <div class="act-total" id="afTot_${i}">0</div>
     </div>`).join('');
+  }
   updateFormTotals();
 }
 function pendingFormPoints(){
@@ -964,29 +990,44 @@ function syncNow(){
   showToast('⏳ Syncing to Sheet...');
   Promise.resolve(pushConfig()).then(()=>cloudLoad(true)).then(()=>showToast('✓ Agents and settings synced to Sheet')).catch(()=>showToast('⚠ Sync failed — check the Web App URL / access.'));
 }
-async function pushConfig(){
-  if(!cloudEnabled())return;
+// Pinagsasama ang sunod-sunod na changes sa isang save para hindi mag-overlap
+let _cfgTimer=null,_cfgWaiters=[],_cfgBusy=false;
+function pushConfig(){
+  if(!cloudEnabled())return Promise.resolve(false);
+  clearTimeout(_cfgTimer);
+  return new Promise(res=>{_cfgWaiters.push(res);_cfgTimer=setTimeout(flushConfig,500)});
+}
+async function flushConfig(){
+  let waiters=_cfgWaiters;_cfgWaiters=[];_cfgBusy=true;let ok=false;
   try{
     let cfgSettings={...settings};delete cfgSettings.sheetsApiUrl;
-    await cloudPost({action:'saveConfig',config:JSON.stringify({activities:activities,agents:agentList,settings:cfgSettings,recruiter:recruiterMap,agentStatus:agentStatusMap,agentTarget:agentTargetMap})});
+    let out=await cloudPost({action:'saveConfig',config:JSON.stringify({activities:activities,agents:agentList,settings:cfgSettings,recruiter:recruiterMap,agentStatus:agentStatusMap,agentTarget:agentTargetMap})});
+    ok=!!(out&&out.ok);
   }catch(e){}
+  _cfgBusy=false;
+  if(!ok)showToast('⚠ Hindi na-sync sa Sheet — check ang Web App URL.');
+  waiters.forEach(r=>r(ok));
 }
-async function cloudLoad(quiet){
+function configPending(){return _cfgBusy||_cfgWaiters.length>0}
+async function cloudLoad(quiet,silent){
   if(!cloudEnabled())return;
   try{
     if(!quiet)showToast('⏳ Kinukuha ang data...');
-    let res=await fetch(getApiUrl());
+    let u=getApiUrl();
+    let res=await fetch(u+(u.indexOf('?')>-1?'&':'?')+'t='+Date.now(),{cache:'no-store'});
     let data=await res.json();
     if(data.ok){
       records=(data.records||[]).map(r=>({...r,date:normDate(r.date),count:Number(r.count||0),points:Number(r.points||0)})).filter(r=>r.id&&r.id!=='id'&&r.agent&&r.agent!=='agent');
       write(KEYS.records,records);
-      if(Array.isArray(data.agents)&&data.agents.length){agentList=data.agents;write(KEYS.agents,agentList)}
-      applyCloudConfig(data.config);
+      if(!configPending()){
+        if(Array.isArray(data.agents)&&data.agents.length){agentList=data.agents;write(KEYS.agents,agentList)}
+        applyCloudConfig(data.config);
+      }
       renderAll();
       if(document.body.classList.contains('agent-mode')){renderAgentForm();updateFormTotals()}
       if(!quiet)showToast('✓ Updated ang data');
     }
-  }catch(e){showToast('⚠ Could not load: '+(e&&e.message?e.message:'connection error'))}
+  }catch(e){if(!silent)showToast('⚠ Could not load: '+(e&&e.message?e.message:'connection error'))}
 }
 async function cloudPost(payload){
   let res=await fetch(getApiUrl(),{method:'POST',body:JSON.stringify(payload)});
@@ -1013,6 +1054,18 @@ function init(){
     renderAgentForm();
   }
   if(cloudEnabled())cloudLoad(true).then(()=>{if(document.body.classList.contains('agent-mode'))updateFormTotals()});
+  // Auto-refresh: kunin ang bagong activities / logo habang bukas ang Agent Form
+  setInterval(()=>{if(cloudEnabled()&&!document.hidden&&document.body.classList.contains('agent-mode'))cloudLoad(true,true)},30000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&cloudEnabled())cloudLoad(true,true)});
+  // Local mode (walang Sheet URL): sync sa ibang tab ng parehong browser
+  window.addEventListener('storage',e=>{
+    if(cloudEnabled()||!e.key||Object.values(KEYS).indexOf(e.key)===-1)return;
+    records=read(KEYS.records,records);activities=read(KEYS.activities,activities);settings=read(KEYS.settings,settings);
+    agentList=read(KEYS.agents,agentList);recruiterMap=read(KEYS.recruiter,recruiterMap);
+    agentStatusMap=read(KEYS.agentStatus,agentStatusMap);agentTargetMap=read(KEYS.agentTarget,agentTargetMap);
+    applyBranding();renderAll();
+    if(document.body.classList.contains('agent-mode'))renderAgentForm();
+  });
 }
 
 /* ---------- Bulk import agents (CSV / PDF) ---------- */
