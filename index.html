@@ -271,6 +271,7 @@ body.agent-mode #agentPortal{display:block}
         <div><label>Challenge End Date<input type="date" id="challengeEnd"></label></div>
         <div style="grid-column:1/-1"><label>Google Apps Script Web App URL (for Google Sheets connection)<input id="sheetsApiUrl" placeholder="https://script.google.com/macros/s/.../exec"></label></div>
         <div><button class="btn" onclick="saveSettings()">Save Settings</button></div>
+        <div><button class="btn2" onclick="testConnection()">🔌 Test Connection</button></div>
         <div><button class="ghost" onclick="resetBranding()">Reset Branding</button></div>
       </div>
     </div>
@@ -313,6 +314,7 @@ body.agent-mode #agentPortal{display:block}
     <div class="card">
       <h3 style="margin:4px 0 2px">Activities</h3>
       <div class="small">Enter the number of activities only — points are computed automatically.</div>
+      <div id="afNoCloud" class="notice hidden" style="background:#fee2e2;color:#991b1b;margin-top:10px">⚠ Hindi naka-connect sa Google Sheet ang form na ito, kaya hindi magsi-sync ang activities, logo, at records. Gamitin ang link mula sa <b>Copy Agent Form Link</b> ng dashboard na may naka-set na Web App URL.</div>
       <div class="act-list" id="afActList"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:12px;border-radius:12px;background:var(--gold)">
         <span style="font-weight:900">Points this entry</span>
@@ -792,14 +794,16 @@ function previewLogo(ev){
 }
 function saveSettings(){
   settings={...settings,baseTarget:Number(baseTarget.value||150),kpiName:kpiName.value.trim()||'TEAM JT KPI',kpiSubtitle:kpiSubtitle.value.trim()||'KPI MONITORING SYSTEM',primaryColor:primaryColor.value,secondaryColor:secondaryColor.value,accentColor:accentColor.value,actionColor:actionColor.value,challengeStart:challengeStart.value||'',challengeEnd:challengeEnd.value||'',sheetsApiUrl:sheetsApiUrl.value.trim()};
-  write(KEYS.settings,settings);applyBranding();renderAll();pushConfig();alert('Branding and KPI settings saved. Synced to all devices.');
+  write(KEYS.settings,settings);applyBranding();renderAll();
+  if(cloudEnabled()){pushConfig().then(ok=>{if(ok){cloudLoad(true);alert('Settings saved at naka-sync na sa Google Sheet.')}})}
+  else alert('Settings saved — pero WALANG Google Sheet URL, kaya sa device na ito lang naka-save.');
 }
 function resetBranding(){
   settings={...settings,kpiName:'TEAM JT KPI',kpiSubtitle:'KPI MONITORING SYSTEM',primaryColor:'#17324e',secondaryColor:'#2e6ea0',accentColor:'#fbe6d4',actionColor:'#e2691c',logoData:''};
   write(KEYS.settings,settings);loadSettingsToForm();applyBranding();pushConfig();
 }
 function loadSettingsToForm(){
-  baseTarget.value=settings.baseTarget||150;sheetsApiUrl.value=settings.sheetsApiUrl||'';challengeStart.value=settings.challengeStart||'';challengeEnd.value=settings.challengeEnd||'';kpiName.value=settings.kpiName||'TEAM JT KPI';kpiSubtitle.value=settings.kpiSubtitle||'KPI MONITORING SYSTEM';primaryColor.value=settings.primaryColor||'#17324e';secondaryColor.value=settings.secondaryColor||'#2e6ea0';accentColor.value=settings.accentColor||'#fbe6d4';actionColor.value=settings.actionColor||'#e2691c';
+  baseTarget.value=settings.baseTarget||150;sheetsApiUrl.value=settings.sheetsApiUrl||getApiUrl()||'';challengeStart.value=settings.challengeStart||'';challengeEnd.value=settings.challengeEnd||'';kpiName.value=settings.kpiName||'TEAM JT KPI';kpiSubtitle.value=settings.kpiSubtitle||'KPI MONITORING SYSTEM';primaryColor.value=settings.primaryColor||'#17324e';secondaryColor.value=settings.secondaryColor||'#2e6ea0';accentColor.value=settings.accentColor||'#fbe6d4';actionColor.value=settings.actionColor||'#e2691c';
 }
 function copyMessage(){navigator.clipboard.writeText(agentMessage.value).then(()=>alert('Message copied.'))}
 async function downloadScorecardPdf(){let el=document.getElementById('scoreCapture'),canvas=await html2canvas(el,{scale:2,useCORS:true}),img=canvas.toDataURL('image/png'),{jsPDF}=window.jspdf,pdf=new jsPDF('p','mm','a4'),w=190,h=canvas.height*w/canvas.width;pdf.addImage(img,'PNG',10,10,w,h);pdf.save((scoreAgent.value||'AGENT')+'_KPI_SCORECARD.pdf')}
@@ -815,6 +819,7 @@ function challengeRange(){
   return{s:mon.toISOString().slice(0,10),e:sun.toISOString().slice(0,10)};
 }
 function renderAgentForm(){
+  try{afNoCloud.classList.toggle('hidden',cloudEnabled())}catch(e){}
   // Branding
   portalTitle.textContent=settings.kpiName||'TEAM JT';
   portalLogo.src=settings.logoData||DEFAULT_LOGO;portalLogo.style.display='block';
@@ -1047,7 +1052,28 @@ async function downloadScreenshot(){
   }catch(e){showToast('⚠ Could not capture the screenshot.')}
 }
 
+function rememberApiFromLink(){
+  try{
+    let p=new URLSearchParams(location.search).get('api');
+    if(p&&p.indexOf('https://')===0&&settings.sheetsApiUrl!==p){settings.sheetsApiUrl=p;write(KEYS.settings,settings)}
+  }catch(e){}
+}
+async function testConnection(){
+  let url=(sheetsApiUrl.value||'').trim()||getApiUrl();
+  if(url.indexOf('https://script.google.com/')!==0)return alert('Walang valid na Web App URL. Dapat nagsisimula sa https://script.google.com/macros/s/ at nagtatapos sa /exec');
+  showToast('⏳ Tine-test ang connection...');
+  try{
+    let res=await fetch(url+(url.indexOf('?')>-1?'&':'?')+'t='+Date.now(),{cache:'no-store'});
+    let data=await res.json();
+    if(!data.ok)throw new Error(data.error||'not ok');
+    let cfg=null;try{cfg=data.config?JSON.parse(data.config):null}catch(e){}
+    alert('✓ Connected!\n\nRecords: '+(data.records||[]).length+'\nAgents: '+(data.agents||[]).length+'\nActivities sa Sheet: '+(cfg&&cfg.activities?cfg.activities.length:'wala pa')+'\nLogo sa Sheet: '+(cfg&&cfg.settings&&cfg.settings.logoData?'meron':'wala pa')+(data.config===undefined?'\n\n⚠ Lumang Apps Script ang naka-deploy (walang config). I-copy ang Apps Script sa ibaba at i-deploy as New Version.':''));
+  }catch(e){
+    alert('✗ Hindi maka-connect sa Sheet.\n\nI-check:\n1. Tamang /exec URL (hindi /dev)\n2. Deploy → Who has access: "Anyone"\n3. Na-deploy as New Version pagkatapos i-paste ang code\n\nError: '+(e&&e.message?e.message:e));
+  }
+}
 function init(){
+  rememberApiFromLink();
   seedDates();loadSettingsToForm();applyBranding();renderAll();
   if(new URLSearchParams(location.search).get('view')==='agent'){
     document.body.classList.add('agent-mode');
