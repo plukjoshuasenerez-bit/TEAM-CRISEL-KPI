@@ -525,9 +525,9 @@ const TEAM_AGENTS=[
 const SHEETS_API_URL="https://script.google.com/macros/s/AKfycbz17JmuNdhMXr4nXRyEoWZ7Yfa21sCvT1JXeX5WvSHDt7e7fWrSSvUY1Lcs7io55yLW/exec";
 
 function getApiUrl(){
-  // Priority: 1) URL param na "api", 2) hardcoded na TEAM URL sa taas, 3) Settings ng device
-  try{let p=new URLSearchParams(location.search).get('api');if(p&&p.indexOf('https://')===0)return p}catch(e){}
+  // Priority: 1) hardcoded na TEAM URL sa taas (laging panalo, para hindi masira ng lumang link), 2) URL param na "api", 3) Settings ng device
   if(SHEETS_API_URL.indexOf('https://')===0)return SHEETS_API_URL;
+  try{let p=new URLSearchParams(location.search).get('api');if(p&&p.indexOf('https://')===0)return p}catch(e){}
   if(settings&&settings.sheetsApiUrl&&settings.sheetsApiUrl.indexOf('https://')===0)return settings.sheetsApiUrl;
   return '';
 }
@@ -891,17 +891,20 @@ async function submitAgentForm(){
 
   if(cloudEnabled()){
     // Submit to Google Sheets — shared sa lahat ng devices
-    let btn=event&&event.target;if(btn)btn.disabled=true;
+    let btn=(typeof event!=='undefined'&&event&&event.target)||null;if(btn)btn.disabled=true;
     showToast('⏳ Saving...');
     try{
       let rows=entries.map(en=>({id:uid(),date,agent:name,status,activity:en.activity,count:en.count,points:en.points,notes:''}));
       let out=await cloudPost({action:'add',records:rows});
-      if(!out.ok)throw new Error(out.error||'save failed');
-      activities.forEach((a,i)=>{let el=document.getElementById('afCount_'+i);if(el)el.value=''});
-      await cloudLoad(true);
-      updateFormTotals();
-      showToast('✓ Activities saved!');
-    }catch(e){showToast('⚠ Could not save. Try again.')}
+      if(!out||!out.ok)throw new Error((out&&out.error)||'save failed');
+    }catch(e){
+      if(btn)btn.disabled=false;
+      showToast('⚠ Could not save: '+((e&&e.message)||e));
+      return;
+    }
+    activities.forEach((a,i)=>{let el=document.getElementById('afCount_'+i);if(el)el.value=''});
+    showToast('✓ Activities saved!');
+    try{await cloudLoad(true);updateFormTotals();}catch(e){}
     if(btn)btn.disabled=false;
     return;
   }
@@ -942,7 +945,8 @@ function showToast(msg){
 }
 function agentFormUrl(){
   let u=new URL(location.href);u.searchParams.set('view','agent');
-  if(cloudEnabled())u.searchParams.set('api',getApiUrl());
+  if(SHEETS_API_URL.indexOf('https://')===0)u.searchParams.delete('api');
+  else if(cloudEnabled())u.searchParams.set('api',getApiUrl());
   u.hash='';return u.toString();
 }
 function copyAgentLink(){
@@ -1082,8 +1086,15 @@ async function cloudLoad(quiet,silent){
   }catch(e){if(!silent)showToast('⚠ Could not load: '+(e&&e.message?e.message:'connection error'))}
 }
 async function cloudPost(payload){
-  let res=await fetch(getApiUrl(),{method:'POST',body:JSON.stringify(payload)});
-  return res.json();
+  let lastErr;
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      let res=await fetch(getApiUrl(),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),cache:'no-store',redirect:'follow'});
+      let txt=await res.text();
+      try{return JSON.parse(txt)}catch(pe){throw new Error('Hindi JSON ang sagot ng Sheet (HTTP '+res.status+'). I-check ang Apps Script deployment.')}
+    }catch(e){lastErr=e;if(attempt===0)await new Promise(r=>setTimeout(r,1200));}
+  }
+  throw lastErr;
 }
 
 async function downloadScreenshot(){
